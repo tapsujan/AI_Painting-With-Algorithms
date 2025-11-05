@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <format>
 
 // --- RNG Global  ---
 static std::mt19937 rng(std::random_device{}());
@@ -217,7 +218,7 @@ int main(int a, char** args) {
     Canvas C_final(C_target.width, C_target.height);
     render(sol_mejor, C_final);
 
-    if (!savePNG(C_final, "output.png")) {
+    if (!savePNG(C_final, std::format("{}{}.png", args[1], args[2]))) {
         std::cerr << "Error guardando output.png\n";
         return 1;
     }
