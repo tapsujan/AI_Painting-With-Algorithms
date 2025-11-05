@@ -3,13 +3,11 @@
 #include <random>
 #include <vector>
 #include <string>
-#include <cmath>      // Para std::exp
-#include <limits>     // Para std::numeric_limits
-#include <algorithm>  // Para std::fmod
+#include <cmath>
+#include <limits>
+#include <algorithm>
 
-#define fuente "instancias/klimt.png"
-
-// --- RNG Global (como en testCall.cpp) ---
+// --- RNG Global  ---
 static std::mt19937 rng(std::random_device{}());
 
 int randInt(int min, int max) {
@@ -22,26 +20,22 @@ float randFloat(float min, float max) {
     return dist(rng);
 }
 
-// clampT (definido en stroke.cpp como static, lo necesitamos aquí también)
+// Gracias Gemini
 template <typename T>
 static inline T clampT(T v, T lo, T hi) {
     return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
 // --- Parámetros del Problema ---
-const int N_STROKES = 50; // Número de trazos. El PDF lo llama 'N' [cite: 108]
+const int N_STROKES = 50; // Número de trazos.
 
 // --- Lienzo Temporal ---
-// Usaremos un canvas global temporal para renderizar las soluciones
-// candidatas. Esto evita crear y destruir memoria en cada iteración.
 Canvas C_temp(0, 0);
 
-// --- Funciones del Modelo (basadas en el PDF) ---
+// --- Funciones del Modelo ---
 
 /**
- * Función de Costo (Energía)
- * Mide el "error" de una solución dada (vector de trazos).
- * Corresponde a la función 'mín MSE(T, I)' del PDF.
+ * MSE
  */
 double calculate_mse(const std::vector<Stroke>& solution, const Canvas& C_target) {
     // 1. Renderizar la solución 'T' en el canvas temporal [cite: 106]
@@ -63,18 +57,16 @@ double calculate_mse(const std::vector<Stroke>& solution, const Canvas& C_target
 }
 
 /**
- * Genera una solución vecina (Mutación)
- * Toma una solución y le aplica un pequeño cambio aleatorio.
- * Esto implementa el operador de 'Mutación' descrito en el PDF.
+ * Mutate (MOVIMIENTO)
  */
 std::vector<Stroke> mutate_solution(std::vector<Stroke> s, int num_brushes) {
     if (s.empty()) return s;
 
     // 1. Elegir un trazo 't_j' al azar para mutar
     int stroke_idx = randInt(0, s.size() - 1);
-    Stroke& t = s[stroke_idx]; // Modificamos la copia
+    Stroke& t = s[stroke_idx];
 
-    // 2. Elegir un parámetro de 't_j' al azar para mutar [cite: 111]
+    // 2. Elegir un parámetro de 't_j' al azar para mutar
     int param_idx = randInt(0, 7); // 8 parámetros en t_j
 
     // Definimos la "fuerza" de la mutación
@@ -91,7 +83,7 @@ std::vector<Stroke> mutate_solution(std::vector<Stroke> s, int num_brushes) {
         case 4: t.r = (uint8_t)clampT((int)t.r + color_change, 0, 255); break;
         case 5: t.g = (uint8_t)clampT((int)t.g + color_change, 0, 255); break;
         case 6: t.b = (uint8_t)clampT((int)t.b + color_change, 0, 255); break;
-        case 7: t.type = randInt(0, num_brushes - 1); break; // Mutación de tipo [cite: 37]
+        case 7: t.type = randInt(0, num_brushes - 1); break; // Mutación
     }
     
     return s; // Devuelve la copia mutada
@@ -105,24 +97,30 @@ std::vector<Stroke> create_random_solution(int N, int num_brushes) {
     std::vector<Stroke> solution;
     for (int i = 0; i < N; ++i) {
         solution.emplace_back(
-            randFloat(0.0f, 1.0f),       // x_rel [cite: 33]
-            randFloat(0.0f, 1.0f),       // y_rel [cite: 33]
-            randFloat(0.1f, 0.4f),       // size_rel [cite: 34]
-            randFloat(0.0f, 360.0f),     // rotation_deg [cite: 35]
-            randInt(0, num_brushes - 1), // type [cite: 37]
-            randInt(0, 255),             // R [cite: 36]
-            randInt(0, 255),             // G [cite: 36]
-            randInt(0, 255)              // B [cite: 36]
+            randFloat(0.0f, 1.0f),       // x_rel 
+            randFloat(0.0f, 1.0f),       // y_rel 
+            randFloat(0.1f, 0.4f),       // size_rel 
+            randFloat(0.0f, 360.0f),     // rotation_deg 
+            randInt(0, num_brushes - 1), // type 
+            randInt(0, 255),             // R 
+            randInt(0, 255),             // G 
+            randInt(0, 255)              // B 
         );
     }
     return solution;
 }
 
 
-// --- Main: Algoritmo Simulated Annealing ---
+// --- Algoritmo Simulated Annealing ---
 
-int main() {
-    // 1) Cargar brushes (igual que en testCall.cpp)
+int main(int a, char** args) {
+    if (a != 3) {
+        std::cerr<<"Error en cantidad de argumentos.\n Por favor sigue el formato [nombre] [alpha]";
+        return 1;
+    }
+    std::string fuente = "instancias/"+std::string(args[1])+".png";
+    float alpha = std::stof(args[2]); //(T_nueva = T * alpha)
+    // 1) Cargar brushes
     {
         ImageGray b0, b1, b2, b3;
         if (!loadImageGray("brushes/1.jpg", b0)) return 1;
@@ -137,7 +135,7 @@ int main() {
     const int NUM_BRUSHES = gBrushes.size();
     std::cout << "Cargados " << NUM_BRUSHES << " brushes.\n";
 
-    // 2) Cargar Imagen Objetivo (la 'instancia' o 'fuente.png')
+    // 2) Cargar Imagen Objetivo
     Canvas C_target(0, 0);
     if (!loadImageRGB_asCanvas(fuente, C_target)) {
         std::cerr << "Error: No se pudo cargar la fuente.\n";
@@ -146,13 +144,12 @@ int main() {
     std::cout << "Imagen objetivo cargada: " 
               << C_target.width << "x" << C_target.height << "\n";
     
-    // Inicializar el canvas temporal con el tamaño correcto
+    // Inicializar el canvas
     C_temp = Canvas(C_target.width, C_target.height);
 
-    // 3) Parámetros de Simulated Annealing
+    // 3) PARAMETROS
     double T = 10000.0;         // Temperatura inicial (alta)
     const double T_final = 0.1; // Temperatura final (baja)
-    const double alfa = 0.998;  // Tasa de enfriamiento (T_nueva = T * alfa)
     const int iter_por_temp = 250; // Iteraciones antes de enfriar
 
     // 4) Inicialización
@@ -202,7 +199,7 @@ int main() {
         } // fin iter_por_temp
 
         // Enfriar la temperatura
-        T = T * alfa; 
+        T = T * alpha; 
         total_iter += iter_por_temp;
 
         // Imprimir progreso
