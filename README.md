@@ -1,5 +1,7 @@
 # Painting with Algorithms
 
+Based in [this repo](https://github.com/valnhe/Proyecto-Base-IA-2025-2/tree/master).
+
 Compiling
 ```cpp
 
