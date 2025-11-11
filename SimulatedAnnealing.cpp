@@ -204,10 +204,10 @@ int main(int a, char** args) {
         total_iter += iter_por_temp;
 
         // Imprimir progreso
-        // if (total_iter % (iter_por_temp * 10) == 0) {
-        //     std::cout << "Iter: " << total_iter << ", T: " << T 
-        //               << ", Mejor MSE: " << costo_mejor << "\n";
-        // }
+        if (total_iter % (iter_por_temp * 10) == 0) {
+            std::cout << "Iter: " << total_iter << ", T: " << T 
+                      << ", Mejor MSE: " << costo_mejor << "\n";
+        }
 
     } // fin while T
 
