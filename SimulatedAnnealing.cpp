@@ -212,8 +212,10 @@ int main(int a, char** args) {
         total_iter += iter_por_temp;
         temp_step++;
 
+        /*
         if (total_iter % (iter_por_temp * 10) == 0)
             std::cout << "Iter: " << total_iter << " | T: " << T << " | MSE: " << costo_mejor << "\n";
+        */
 
         if (total_iter % (iter_por_temp * 1000) == 0) {
             Canvas C_parcial(C_target.width, C_target.height);
