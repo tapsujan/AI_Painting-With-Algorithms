@@ -217,7 +217,7 @@ int main(int a, char** args) {
             std::cout << "Iter: " << total_iter << " | T: " << T << " | MSE: " << costo_mejor << "\n";
         */
 
-        if (total_iter % (iter_por_temp * 1000) == 0) {
+        if (total_iter % (iter_por_temp * 500) == 0) {
             Canvas C_parcial(C_target.width, C_target.height);
             render(sol_mejor, C_parcial); 
             std::string pName = std::format("{}/iter_{:04d}_T_{:.2f}.png", folderPath, temp_step, T);
