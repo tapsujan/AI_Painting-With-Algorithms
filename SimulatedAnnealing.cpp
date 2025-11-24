@@ -7,6 +7,11 @@
 #include <limits>
 #include <algorithm>
 #include <format>
+#include <filesystem> // C++17: Para crear directorios
+#include <fstream>    // Para escribir el .txt
+#include <chrono>     // Para medir el tiempo
+
+namespace fs = std::filesystem;
 
 // --- RNG Global  ---
 static std::mt19937 rng(std::random_device{}());
@@ -21,29 +26,30 @@ float randFloat(float min, float max) {
     return dist(rng);
 }
 
-// Gracias Gemini
 template <typename T>
 static inline T clampT(T v, T lo, T hi) {
     return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
 // --- Parámetros del Problema ---
-const int N_STROKES = 50; // Número de trazos.
-
-// --- Lienzo Temporal ---
+const int N_STROKES = 50; 
 Canvas C_temp(0, 0);
+
+// --- Estructura para Estadísticas ---
+struct RunStats {
+    long long accepted_mutations[8] = {0}; // Contadores para cada tipo de parámetro
+    // 0:x, 1:y, 2:size, 3:rot, 4:r, 5:g, 6:b, 7:type
+    std::vector<double> mse_history;
+};
 
 // --- Funciones del Modelo ---
 
-/**
- * MSE
- */
 double calculate_mse(const std::vector<Stroke>& solution, const Canvas& C_target) {
-    // 1. Renderizar la solución 'T' en el canvas temporal [cite: 106]
-    C_temp.clear(255, 255, 255); // Fondo blanco
-    render(solution, C_temp);   // 'render' es de stroke.cpp
+    // 1. Renderizar
+    C_temp.clear(255, 255, 255); 
+    render(solution, C_temp);   
 
-    // 2. Calcular el MSE contra la imagen objetivo 'I' [cite: 102]
+    // 2. Calcular MSE
     double mse = 0.0;
     const size_t num_pixels = C_target.width * C_target.height;
     if (num_pixels == 0) return std::numeric_limits<double>::max();
@@ -52,25 +58,13 @@ double calculate_mse(const std::vector<Stroke>& solution, const Canvas& C_target
         double diff = (double)C_temp.rgb[i] - (double)C_target.rgb[i];
         mse += diff * diff;
     }
-    
-    // Promedio de los errores al cuadrado [cite: 102]
     return mse / (double)(num_pixels * 3);
 }
 
 /**
- * Mutate (MOVIMIENTO)
+ * Mutate: Ahora recibe param_idx desde fuera para poder trackearlo
  */
-std::vector<Stroke> mutate_solution(std::vector<Stroke> s, int num_brushes) {
-    if (s.empty()) return s;
-
-    // 1. Elegir un trazo 't_j' al azar para mutar
-    int stroke_idx = randInt(0, s.size() - 1);
-    Stroke& t = s[stroke_idx];
-
-    // 2. Elegir un parámetro de 't_j' al azar para mutar
-    int param_idx = randInt(0, 7); // 8 parámetros en t_j
-
-    // Definimos la "fuerza" de la mutación
+void apply_mutation(Stroke& t, int param_idx, int num_brushes) {
     float pos_change = randFloat(-0.05f, 0.05f);
     float size_change = randFloat(-0.02f, 0.02f);
     float rot_change = randFloat(-10.0f, 10.0f);
@@ -79,150 +73,189 @@ std::vector<Stroke> mutate_solution(std::vector<Stroke> s, int num_brushes) {
     switch (param_idx) {
         case 0: t.x_rel = clampT(t.x_rel + pos_change, 0.0f, 1.0f); break;
         case 1: t.y_rel = clampT(t.y_rel + pos_change, 0.0f, 1.0f); break;
-        case 2: t.size_rel = clampT(t.size_rel + size_change, 0.05f, 1.0f); break; // Evitar tamaño 0
+        case 2: t.size_rel = clampT(t.size_rel + size_change, 0.05f, 1.0f); break;
         case 3: t.rotation_deg = std::fmod(t.rotation_deg + rot_change, 360.0f); break;
         case 4: t.r = (uint8_t)clampT((int)t.r + color_change, 0, 255); break;
         case 5: t.g = (uint8_t)clampT((int)t.g + color_change, 0, 255); break;
         case 6: t.b = (uint8_t)clampT((int)t.b + color_change, 0, 255); break;
-        case 7: t.type = randInt(0, num_brushes - 1); break; // Mutación
+        case 7: t.type = randInt(0, num_brushes - 1); break;
     }
-    
-    return s; // Devuelve la copia mutada
 }
 
-/**
- * Genera una solución inicial aleatoria
- * Crea un vector 'T' con N trazos aleatorios.
- */
 std::vector<Stroke> create_random_solution(int N, int num_brushes) {
     std::vector<Stroke> solution;
+    solution.reserve(N);
     for (int i = 0; i < N; ++i) {
         solution.emplace_back(
-            randFloat(0.0f, 1.0f),       // x_rel 
-            randFloat(0.0f, 1.0f),       // y_rel 
-            randFloat(0.1f, 0.4f),       // size_rel 
-            randFloat(0.0f, 360.0f),     // rotation_deg 
-            randInt(0, num_brushes - 1), // type 
-            randInt(0, 255),             // R 
-            randInt(0, 255),             // G 
-            randInt(0, 255)              // B 
+            randFloat(0.0f, 1.0f), randFloat(0.0f, 1.0f),       
+            randFloat(0.1f, 0.4f), randFloat(0.0f, 360.0f),     
+            randInt(0, num_brushes - 1), 
+            randInt(0, 255), randInt(0, 255), randInt(0, 255)
         );
     }
     return solution;
 }
 
-
-// --- Algoritmo Simulated Annealing ---
+// --- Main ---
 
 int main(int a, char** args) {
     if (a != 3) {
-        std::cerr<<"Error en cantidad de argumentos.\n Por favor sigue el formato [nombre] [alpha]";
+        std::cerr << "Uso: ./programa [nombre_imagen] [alpha]\n";
         return 1;
     }
-    std::string fuente = "instancias/"+std::string(args[1])+".png";
-    float alpha = std::stof(args[2]); //(T_nueva = T * alpha)
-    // 1) Cargar brushes
+
+    // --- 0. Configuración de Directorios y Tiempo ---
+    auto start_time = std::chrono::high_resolution_clock::now();
+    
+    std::string imgName = args[1];
+    std::string alphaStr = args[2];
+    float alpha = std::stof(alphaStr);
+    
+    // Crear carpeta ./parciales/nombre_alpha
+    std::string folderPath = std::format("parciales/{}_{}", imgName, alphaStr);
+    try {
+        if (!fs::exists("parciales")) fs::create_directory("parciales");
+        if (!fs::exists(folderPath)) fs::create_directory(folderPath);
+    } catch (const std::exception& e) {
+        std::cerr << "Error creando directorios: " << e.what() << "\n";
+        return 1;
+    }
+
+    std::string fuente = "instancias/" + imgName + ".png";
+
+    // --- 1. Cargar Recursos ---
     {
         ImageGray b0, b1, b2, b3;
         if (!loadImageGray("brushes/1.jpg", b0)) return 1;
         if (!loadImageGray("brushes/2.jpg", b1)) return 1;
         if (!loadImageGray("brushes/3.jpg", b2)) return 1;
         if (!loadImageGray("brushes/4.jpg", b3)) return 1;
-        gBrushes.push_back(std::move(b0));
-        gBrushes.push_back(std::move(b1));
-        gBrushes.push_back(std::move(b2));
-        gBrushes.push_back(std::move(b3));
+        gBrushes.push_back(std::move(b0)); gBrushes.push_back(std::move(b1));
+        gBrushes.push_back(std::move(b2)); gBrushes.push_back(std::move(b3));
     }
     const int NUM_BRUSHES = gBrushes.size();
-    std::cout << "Cargados " << NUM_BRUSHES << " brushes.\n";
 
-    // 2) Cargar Imagen Objetivo
     Canvas C_target(0, 0);
     if (!loadImageRGB_asCanvas(fuente, C_target)) {
-        std::cerr << "Error: No se pudo cargar la fuente.\n";
+        std::cerr << "Error cargando fuente.\n";
         return 1;
     }
-    std::cout << "Imagen objetivo cargada: " 
-              << C_target.width << "x" << C_target.height << "\n";
-    
-    // Inicializar el canvas
     C_temp = Canvas(C_target.width, C_target.height);
 
-    // 3) PARAMETROS
-    double T = 10000.0;         // Temperatura inicial (alta)
-    const double T_final = 0.1; // Temperatura final (baja)
-    const int iter_por_temp = 250; // Iteraciones antes de enfriar
+    // --- 2. Parámetros SA ---
+    double T = 10000.0;         
+    const double T_final = 0.1; 
+    const int iter_por_temp = 250; 
 
-    // 4) Inicialización
+    // --- 3. Estado Inicial ---
     std::vector<Stroke> sol_actual = create_random_solution(N_STROKES, NUM_BRUSHES);
     double costo_actual = calculate_mse(sol_actual, C_target);
 
     std::vector<Stroke> sol_mejor = sol_actual;
     double costo_mejor = costo_actual;
+    
+    RunStats stats; // Estructura para guardar datos
 
-    std::cout << "Costo inicial (MSE): " << costo_mejor << std::endl;
+    std::cout << "Inicio SA | Costo Inicial: " << costo_mejor << "\n";
 
-    // 5) Bucle Principal de Recocido (SA)
-    long total_iter = 0;
+    // --- 4. Bucle SA ---
+    long long total_iter = 0;
+    int temp_step = 0; // Contador para nombrar los archivos parciales
+
     while (T > T_final) {
 
         for (int i = 0; i < iter_por_temp; ++i) {
             
-            // Generar un vecino
-            std::vector<Stroke> sol_nueva = mutate_solution(sol_actual, NUM_BRUSHES);
-            
-            // Evaluar el costo del vecino
-            double costo_nuevo = calculate_mse(sol_nueva, C_target);
+            // A. Crear copia para mutar
+            std::vector<Stroke> sol_nueva = sol_actual;
 
-            // Calcular diferencia de energía/costo
+            // B. Seleccionar qué mutar (para llevar registro)
+            int stroke_idx = randInt(0, N_STROKES - 1);
+            int param_idx = randInt(0, 7); // 0..7 variables
+
+            // C. Aplicar mutación específica
+            apply_mutation(sol_nueva[stroke_idx], param_idx, NUM_BRUSHES);
+            
+            // D. Evaluar
+            double costo_nuevo = calculate_mse(sol_nueva, C_target);
             double delta_E = costo_nuevo - costo_actual;
 
-            // Decidir si aceptamos la nueva solución
+            // E. Criterio de Aceptación
+            bool accepted = false;
             if (delta_E < 0) {
-                // Es mejor: aceptamos siempre
-                sol_actual = std::move(sol_nueva);
-                costo_actual = costo_nuevo;
+                accepted = true; 
             } else {
-                // Es peor: aceptamos con probabilidad e^(-delta_E / T)
                 double prob = std::exp(-delta_E / T);
                 if (randFloat(0.0f, 1.0f) < prob) {
-                    sol_actual = std::move(sol_nueva);
-                    costo_actual = costo_nuevo;
+                    accepted = true;
                 }
-                // Si no, la descartamos y 'sol_actual' no cambia
             }
 
-            // Actualizar la mejor solución global encontrada
-            if (costo_actual < costo_mejor) {
-                sol_mejor = sol_actual;
-                costo_mejor = costo_actual;
-            }
-        } // fin iter_por_temp
+            if (accepted) {
+                sol_actual = std::move(sol_nueva);
+                costo_actual = costo_nuevo;
+                // Registrar éxito de este parámetro
+                stats.accepted_mutations[param_idx]++; 
 
-        // Enfriar la temperatura
+                if (costo_actual < costo_mejor) {
+                    sol_mejor = sol_actual;
+                    costo_mejor = costo_actual;
+                }
+            }
+        } 
+
+        // 1. Guardar MSE actual
+        stats.mse_history.push_back(costo_actual);
+
+        // Enfriamiento
         T = T * alpha; 
         total_iter += iter_por_temp;
+        temp_step++;
 
-        // Imprimir progreso
-        if (total_iter % (iter_por_temp * 10) == 0) {
-            std::cout << "Iter: " << total_iter << ", T: " << T 
-                      << ", Mejor MSE: " << costo_mejor << "\n";
+        if (total_iter % (iter_por_temp * 10) == 0)
+            std::cout << "Iter: " << total_iter << " | T: " << T << " | MSE: " << costo_mejor << "\n";
+
+        if (total_iter % (iter_por_temp * 1000) == 0) {
+            Canvas C_parcial(C_target.width, C_target.height);
+            render(sol_mejor, C_parcial); 
+            std::string pName = std::format("{}/iter_{:04d}_T_{:.2f}.png", folderPath, temp_step, T);
+            savePNG(C_parcial, pName);
         }
+    }
 
-    } // fin while T
+    // --- 5. Finalización y Reporte ---
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = end_time - start_time;
+    double duration_sec = diff.count();
 
-    std::cout << "Optimización terminada.\n";
-    std::cout << "Mejor MSE final: " << costo_mejor << "\n";
+    std::cout << "Terminado en " << duration_sec << "s. MSE Final: " << costo_mejor << "\n";
 
-    // 6) Renderizar y Guardar la MEJOR solución encontrada
+    // Guardar imagen final
     Canvas C_final(C_target.width, C_target.height);
     render(sol_mejor, C_final);
+    savePNG(C_final, std::format("{}/FINAL.png", folderPath));
 
-    if (!savePNG(C_final, std::format("{}{}.png", args[1], args[2]))) {
-        std::cerr << "Error guardando output.png\n";
-        return 1;
+    // Guardar LOG .txt
+    std::string logName = std::format("{}/reporte.txt", folderPath);
+    std::ofstream logFile(logName);
+    if (logFile.is_open()) {
+        // Primera fila: Encabezados de contadores + Tiempo
+        logFile << "Mut_X Mut_Y Mut_Size Mut_Rot Mut_R Mut_G Mut_B Mut_Type Time_Sec\n";
+        
+        // Segunda fila: Datos de contadores + Tiempo
+        for(int k=0; k<8; ++k) logFile << stats.accepted_mutations[k] << " ";
+        logFile << duration_sec << "\n";
+
+        // %
+        for(int k=0; k<8; ++k) logFile << stats.accepted_mutations[k]/total_iter << " ";
+        logFile << duration_sec << "\n";
+
+        logFile << "--- Historial MSE por cambio de temperatura ---\n";
+        for (double val : stats.mse_history) {
+            logFile << val << "\n";
+        }
+        logFile.close();
     }
-    
-    std::cout << "OK: png guardado\n";
+
     return 0;
 }
